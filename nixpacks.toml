@@ -3,7 +3,7 @@ nixPkgs = ["nodejs_22", "python312", "uv"]
 
 [phases.install]
 cmds = [
-  "npm install --legacy-peer-deps",
+  "cd backend && npm install --legacy-peer-deps",
   "cd py && uv sync"
 ]
 
