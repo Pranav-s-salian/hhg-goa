@@ -62,7 +62,9 @@ export class TigerGraphStore implements GraphStore {
       const transport = new StdioClientTransport({
         command: this.opts.command ?? python,
         args: this.opts.args ?? ["py/scripts/tg_mcp_launcher.py", this.opts.graph],
-        cwd: ROOT, stderr: "pipe",
+        cwd: ROOT, 
+        stderr: "pipe",
+        env: process.env, // Pass environment variables to Python subprocess
       });
       // Listen for stderr to diagnose connection issues
       transport.stderr?.on('data', (data) => {
