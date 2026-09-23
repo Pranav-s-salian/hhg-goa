@@ -1,6 +1,7 @@
-"""Minimal TigerGraph Savanna client (stdlib only). Reads TG_HOST and TG_SECRET from the repo .env, never prints them.
+"""Minimal TigerGraph Savanna client (stdlib only). Reads TG_HOST and TG_SECRET from the repo .env or environment variables, never prints them.
 A database secret is exchanged for a 1-hour JWT (POST /gsql/v1/tokens); the token is refreshed automatically."""
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -12,10 +13,19 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def _env() -> dict:
     out = {}
-    for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.split("#")[0].strip() if k.strip() != "TG_SECRET" else v.strip()
+    env_file = ROOT / ".env"
+    
+    # Try to read from .env file first (for local development)
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.split("#")[0].strip() if k.strip() != "TG_SECRET" else v.strip()
+    
+    # Fall back to environment variables (for deployment)
+    if not out:
+        out = dict(os.environ)
+    
     return out
 
 
