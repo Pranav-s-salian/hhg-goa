@@ -19,7 +19,10 @@ try:
     
     env = dict(os.environ, TG_HOST=host, TG_GRAPHNAME=graph, TG_API_TOKEN=token, TG_JWT_TOKEN=token,
                TG_RESTPP_PORT=e.get("TG_RESTPP_PORT", "443"), TG_GS_PORT=e.get("TG_GS_PORT", "443"), TG_SSL_VERIFY="true")
-    exe = Path(sys.executable).with_name("tigergraph-mcp.exe")
+    
+    # On Windows: tigergraph-mcp.exe, on Linux: tigergraph-mcp
+    exe_name = "tigergraph-mcp.exe" if sys.platform == "win32" else "tigergraph-mcp"
+    exe = Path(sys.executable).with_name(exe_name)
 
     # Diagnostic output to stderr so it doesn't interfere with stdio MCP communication
     print(f"[launcher] Python: {sys.executable}", file=sys.stderr)
@@ -29,7 +32,7 @@ try:
     print(f"[launcher] Host: {host}", file=sys.stderr)
 
     if not exe.exists():
-        print(f"[launcher] ERROR: tigergraph-mcp.exe not found at {exe}", file=sys.stderr)
+        print(f"[launcher] ERROR: {exe_name} not found at {exe}", file=sys.stderr)
         sys.exit(1)
 
     print(f"[launcher] Starting TigerGraph MCP server...", file=sys.stderr)
