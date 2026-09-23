@@ -3,7 +3,8 @@ nixPkgs = ["nodejs_22", "python312", "uv"]
 
 [phases.install]
 cmds = [
-  "cd backend && npm install --legacy-peer-deps",
+  "cd shared && npm install --legacy-peer-deps",
+  "cd backend && cp package.railway.json package.json && npm install --legacy-peer-deps",
   "cd py && uv sync"
 ]
 
