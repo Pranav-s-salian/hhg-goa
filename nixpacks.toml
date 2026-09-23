@@ -1,8 +1,11 @@
 [phases.setup]
-nixPkgs = ["nodejs_22"]
+nixPkgs = ["nodejs_22", "python312", "uv"]
 
 [phases.install]
-cmds = ["npm install --legacy-peer-deps"]
+cmds = [
+  "npm install --legacy-peer-deps",
+  "cd py && uv sync"
+]
 
 [phases.build]
 cmds = ["cd backend && npm run build || echo 'No build step'"]
