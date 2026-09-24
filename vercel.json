@@ -1,4 +1,15 @@
 {
-  "buildCommand": "cd frontend && cp package.vercel.json package.json && cd ../shared && npm install && cd ../frontend && npm install && npm run build",
-  "installCommand": "echo 'Using custom build command'"
+  "version": 2,
+  "builds": [
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/next",
+      "config": {
+        "zeroConfig": false
+      }
+    }
+  ],
+  "installCommand": "cd shared && npm install && cd ../frontend && cp package.vercel.json package.json && npm install",
+  "buildCommand": "cd frontend && npm run build",
+  "outputDirectory": "frontend/.next"
 }
