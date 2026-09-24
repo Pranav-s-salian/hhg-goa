@@ -1,15 +1,5 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "frontend/package.json",
-      "use": "@vercel/next",
-      "config": {
-        "zeroConfig": false
-      }
-    }
-  ],
-  "installCommand": "cd shared && npm install && cd ../frontend && cp package.vercel.json package.json && npm install",
-  "buildCommand": "cd frontend && npm run build",
+  "buildCommand": "cd frontend && pnpm install && pnpm run build",
+  "installCommand": "pnpm install",
   "outputDirectory": "frontend/.next"
 }
