@@ -53,18 +53,19 @@ export function buildServer(dir = datasetDir()) {
     const ollama = await checkOllama();
     const problems: string[] = [];
     
-    // Check if using Groq (cloud) or Ollama (local)
+    // Check what AI service is being used
+    const usingOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
     const usingGroq = Boolean(process.env.GROQ_API_KEY);
+    const aiService = usingOpenRouter ? "OpenRouter" : usingGroq ? "Groq Cloud" : "Ollama";
     
-    if (!usingGroq) {
-      // Only check Ollama if not using Groq
+    if (!usingOpenRouter && !usingGroq) {
+      // Only check Ollama if not using cloud services
       if (!ollama.up) problems.push(`Ollama is not running at ${ollama.host}. The AI writer cannot work without it.`);
       else {
         if (ollama.writer && !ollama.writerListed) problems.push(`The AI model "${ollama.writer}" is not available in Ollama. Check LLM_MODEL_OLLAMA in .env (or run: ollama pull ${ollama.writer}).`);
         if (rag && !ollama.embedListed) problems.push(`The embedding model "${ollama.embed}" is not in Ollama, so similar-case lookup will not work (ollama pull ${ollama.embed}).`);
       }
     }
-    // If using Groq, we don't need to check Ollama
     
     if (store.kind === "tigergraph" && countsError) problems.push(`The TigerGraph database did not answer: ${countsError.slice(0, 120)}. Is the Savanna workspace resumed?`);
     return {
@@ -72,7 +73,14 @@ export function buildServer(dir = datasetDir()) {
       problems,
       dataset: { dir, store: store.kind, transactions: 0, cards: 0, devices: 0, closed: 0, pack: store.packCases().length, ...counts },
       narrator: narrator.mode, narratorModel: narrator.model ?? null,
-      components: { store: store.kind, graph: store.kind === "tigergraph" ? (process.env.TG_GRAPH ?? "FraudGraph") : null, rag: Boolean(rag), ollama: usingGroq ? { up: false, host: "Using Groq Cloud", writer: narrator.model, writerListed: true, embed: null, embedListed: false } : ollama },
+      components: { 
+        store: store.kind, 
+        graph: store.kind === "tigergraph" ? (process.env.TG_GRAPH ?? "FraudGraph") : null, 
+        rag: Boolean(rag), 
+        ollama: (usingOpenRouter || usingGroq) 
+          ? { up: false, host: `Using ${aiService}`, writer: narrator.model, writerListed: true, embed: null, embedListed: false } 
+          : ollama 
+      },
     };
   });
 

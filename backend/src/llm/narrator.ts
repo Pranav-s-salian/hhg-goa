@@ -100,6 +100,108 @@ export function extractJson(text: string): unknown {
   throw new Error("the model did not return JSON");
 }
 
+// ------------------------------------------------------------------ OpenRouter with fallback
+export interface OpenRouterOptions { apiKey: string; models: string[]; timeoutMs?: number; fetchImpl?: typeof fetch }
+
+export class OpenRouterNarrator implements Narrator {
+  readonly mode = "ollama" as const; // Keep as "ollama" for compatibility
+  private log: Comm[] = [];
+  private currentModel: string;
+  
+  constructor(private o: OpenRouterOptions) {
+    this.currentModel = o.models[0];
+  }
+  
+  get model(): string { return this.currentModel; }
+  takeLog(): Comm[] { const l = this.log; this.log = []; return l; }
+
+  private async ask(system: string, user: string, key: "summary" | "narrative" | "customer_explanation", modelIndex = 0): Promise<{ text: string; tokens: number; model: string }> {
+    if (modelIndex >= this.o.models.length) {
+      throw new Error("All models failed");
+    }
+    
+    const model = this.o.models[modelIndex];
+    const f = this.o.fetchImpl ?? fetch;
+    
+    try {
+      const res = await f("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { 
+          "Authorization": `Bearer ${this.o.apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://github.com/yourusername/hhg-fraud-agent",
+          "X-Title": "HHG Fraud Agent"
+        },
+        signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user }
+          ],
+          temperature: 0.1,
+          max_tokens: 2048,
+          response_format: { type: "json_object" }
+        }),
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error(`Model ${model} failed with ${res.status}: ${errorText}`);
+        // Try next model
+        return this.ask(system, user, key, modelIndex + 1);
+      }
+      
+      const j = (await res.json()) as { 
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      const content = j.choices?.[0]?.message?.content ?? "";
+      const parsed = z.object({ [key]: z.string().min(1) }).parse(extractJson(content)) as Record<string, string>;
+      return { text: parsed[key], tokens: j.usage?.total_tokens ?? 0, model };
+    } catch (e) {
+      console.error(`Model ${model} error: ${(e as Error).message}`);
+      // Try next model
+      return this.ask(system, user, key, modelIndex + 1);
+    }
+  }
+
+  private async run(kind: "explain" | "sar" | "customer", b: Brief): Promise<NarrationResult> {
+    const key = kind === "explain" ? "summary" : kind === "sar" ? "narrative" : "customer_explanation";
+    const check = kind === "explain" ? checkExplain : kind === "sar" ? checkSar : checkCustomerExplain;
+    const system = kind === "explain"
+      ? "You write a 2 to 6 sentence case summary for a fraud analyst. Use ONLY the facts in the JSON brief. Do not invent numbers, IDs or actions. Return JSON {\"summary\": string}."
+      : kind === "sar"
+      ? "You write a suspicious activity report narrative of 6 to 12 sentences answering who, what, when, where, how and why it is suspicious. Use ONLY the facts in the JSON brief; mention each subject ID. Do not invent numbers or IDs. Return JSON {\"narrative\": string}."
+      : "You explain in 2 to 4 simple sentences why we're reviewing this transaction. Use plain language a customer can understand - avoid technical terms. Focus on what happened and what we're doing about it. Use ONLY the facts in the JSON brief. Return JSON {\"customer_explanation\": string}.";
+    let tokens = 0, feedback = "", lastProblem = "";
+    
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const t0 = performance.now();
+        const r = await this.ask(system, JSON.stringify(b) + feedback, key);
+        this.currentModel = r.model;
+        tokens += r.tokens;
+        this.log.push({ from: "Agent", to: `OpenRouter · ${r.model}`, what: kind === "explain" ? "write the summary" : kind === "sar" ? "write the regulator report" : "write customer explanation", ms: Math.round(performance.now() - t0), ok: true });
+        const problem = check(r.text, b);
+        if (!problem) return { text: r.text, tokens, fellBack: false, model: r.model };
+        lastProblem = `rejected: ${problem}`;
+        feedback = `\n\nYour previous answer was rejected: ${problem}. Fix it and answer again.`;
+      } catch (e) {
+        this.log.push({ from: "Agent", to: `OpenRouter`, what: `${kind === "explain" ? "write the summary" : kind === "sar" ? "write the regulator report" : "write customer explanation"} (failed: ${(e as Error).message.slice(0, 60)})`, ms: 0, ok: false });
+        lastProblem = (e as Error).message;
+        feedback = `\n\nYour previous answer could not be used (${(e as Error).message}). Return valid JSON.`;
+      }
+    }
+    throw new NarratorError(`The AI model could not write the ${kind === "explain" ? "summary" : kind === "sar" ? "regulator report" : "customer explanation"} after 3 tries across all fallback models: ${lastProblem}. ` +
+      "Check that OPENROUTER_API_KEY is set in .env. Nothing was written in its place.");
+  }
+
+  explain(b: Brief): Promise<NarrationResult> { return this.run("explain", b); }
+  sar(b: Brief): Promise<NarrationResult> { return this.run("sar", b); }
+  explainToCustomer(b: Brief): Promise<NarrationResult> { return this.run("customer", b); }
+}
+
 // ------------------------------------------------------------------ Groq Cloud
 export interface GroqOptions { apiKey: string; model: string; timeoutMs?: number; fetchImpl?: typeof fetch }
 
@@ -252,8 +354,19 @@ export class DecisionOnlyNarrator implements Narrator {
   async explainToCustomer(): Promise<NarrationResult> { return { text: "", tokens: 0, fellBack: false }; }
 }
 
-/** The writer is always an AI model, chosen in .env. Supports both Groq (cloud) and Ollama (local). */
+/** The writer is always an AI model, chosen in .env. Supports OpenRouter (cloud with fallback), Groq (cloud), and Ollama (local). */
 export function narratorFromEnv(env: NodeJS.ProcessEnv = process.env): Narrator {
+  // Check if using OpenRouter (cloud with fallback) - PREFERRED
+  const openrouterKey = env.OPENROUTER_API_KEY?.trim();
+  if (openrouterKey) {
+    const models = (env.OPENROUTER_MODELS?.trim() || "qwen/qwen3.8-27b:free,google/gemini-flash-1.5-8b:free,meta-llama/llama-3.2-3b-instruct:free").split(",");
+    return new OpenRouterNarrator({
+      apiKey: openrouterKey,
+      models,
+      timeoutMs: Number(env.LLM_TIMEOUT_S ?? 120) * 1000,
+    });
+  }
+  
   // Check if using Groq (cloud)
   const groqKey = env.GROQ_API_KEY?.trim();
   const groqModel = env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
@@ -268,7 +381,7 @@ export function narratorFromEnv(env: NodeJS.ProcessEnv = process.env): Narrator 
   
   // Fall back to Ollama (local)
   const model = env.LLM_MODEL_OLLAMA?.trim();
-  if (!model) throw new NarratorError("Either GROQ_API_KEY or LLM_MODEL_OLLAMA must be set. Put your Groq API key in .env (recommended for deployment) or set the Ollama model name for local development.");
+  if (!model) throw new NarratorError("Either OPENROUTER_API_KEY, GROQ_API_KEY, or LLM_MODEL_OLLAMA must be set. Put your OpenRouter API key in .env (recommended for deployment) or set the Groq/Ollama model for alternatives.");
   return new OllamaNarrator({
     host: env.OLLAMA_HOST ?? "http://localhost:11434", model, numCtx: Number(env.OLLAMA_NUM_CTX ?? 8192), timeoutMs: Number(env.LLM_TIMEOUT_S ?? 120) * 1000,
   });
